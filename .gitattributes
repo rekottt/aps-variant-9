@@ -1,0 +1,5 @@
+*.puml text eol=lf
+*.md text eol=lf
+*.docx binary
+*.png binary
+*.svg text eol=lf

@@ -1,0 +1,271 @@
+@startuml
+
+title Диаграмма классов — система распределения заказов сервиса доставки еды (вариант 9)
+
+skinparam classAttributeIconSize 0
+left to right direction
+
+enum TaskStatus {
+    CREATED
+    IN_BUFFER
+    PROCESSING
+    COMPLETED
+    REJECTED
+}
+
+enum EventType {
+    COURIER_RELEASED
+    TASK_GENERATED
+}
+
+class Task {
+    - id: int
+    - sourceId: int
+    - priority: int
+    - createdAt: double
+    - bufferEnteredAt: double
+    - serviceStartedAt: double
+    - completedAt: double
+    - rejectedAt: double
+    - status: TaskStatus
+
+    + markBuffered(time: double): void
+    + markProcessing(time: double): void
+    + markCompleted(time: double): void
+    + markRejected(time: double): void
+}
+
+class Source {
+    - id: int
+    - priority: int
+    - meanInterval: double
+    - generatedCount: int
+
+    + generateTask(time: double): Task
+    + getNextGenerationTime(time: double): double
+}
+
+class Buffer {
+    - capacity: int
+    - queue: Task[]
+
+    + isFull(): boolean
+    + isEmpty(): boolean
+    + size(): int
+    + enqueue(task: Task): boolean
+    + removeTask(task: Task): void
+    + tasksOfSource(sourceId: int): Task[]
+    + mostPrioritySourceId(): int
+}
+
+class PlacementDispatcher {
+    - buffer: Buffer
+    - selectionDispatcher: SelectionDispatcher
+    - statistics: StatisticsCollector
+
+    + placeTask(task: Task, time: double): void
+}
+
+class SelectionDispatcher {
+    - buffer: Buffer
+    - couriers: Courier[]
+    - activeBatchSourceId: int
+    - activeBatchPendingCount: int
+    - eventCalendar: EventCalendar
+    - statistics: StatisticsCollector
+
+    + onTaskAdded(time: double): void
+    + onCourierReleased(time: double): void
+    - tryDispatch(time: double): void
+    - formBatch(): void
+    - findFreeCourierByPriority(): Courier
+}
+
+class Courier {
+    - id: int
+    - currentTask: Task
+    - busy: boolean
+    - busyFrom: double
+    - totalBusyTime: double
+    - minServiceTime: double
+    - maxServiceTime: double
+
+    + isFree(): boolean
+    + startProcessing(task: Task, time: double): double
+    + finishProcessing(time: double): Task
+    - generateServiceDuration(): double
+}
+
+abstract class ScheduledEvent {
+    - time: double
+    - sequenceNumber: long
+
+    + getTime(): double
+    + getType(): EventType
+    + execute(engine: SimulationEngine): void
+}
+
+class TaskGeneratedEvent {
+    - source: Source
+
+    + getType(): EventType
+    + execute(engine: SimulationEngine): void
+}
+
+class CourierReleasedEvent {
+    - courier: Courier
+    - task: Task
+
+    + getType(): EventType
+    + execute(engine: SimulationEngine): void
+}
+
+class EventCalendar {
+    - events: ScheduledEvent[]
+    - nextSequenceNumber: long
+
+    + add(event: ScheduledEvent): void
+    + next(): ScheduledEvent
+    + isEmpty(): boolean
+}
+
+class SimulationEngine {
+    - currentTime: double
+    - sources: Source[]
+    - couriers: Courier[]
+    - eventCalendar: EventCalendar
+    - placementDispatcher: PlacementDispatcher
+    - selectionDispatcher: SelectionDispatcher
+    - statistics: StatisticsCollector
+
+    + initialize(): void
+    + step(): void
+    + run(untilTime: double): void
+    ~ processTaskGenerated(event: TaskGeneratedEvent): void
+    ~ processCourierReleased(event: CourierReleasedEvent): void
+}
+
+class StatisticsCollector {
+    - generatedCount: int
+    - rejectedCount: int
+    - completedCount: int
+    - generatedBySource: Map
+    - rejectedBySource: Map
+    - completedBySource: Map
+    - courierBusyTime: Map
+
+    + recordGenerated(task: Task): void
+    + recordRejected(task: Task): void
+    + recordServiceStart(task: Task, courier: Courier): void
+    + recordCompleted(task: Task, courier: Courier): void
+
+    + getRejectProbability(sourceId: int): double
+    + getAverageSystemTime(sourceId: int): double
+    + getAverageWaitingTime(sourceId: int): double
+    + getAverageServiceTime(sourceId: int): double
+    + getCourierUtilization(courierId: int): double
+}
+
+ScheduledEvent <|-- TaskGeneratedEvent
+ScheduledEvent <|-- CourierReleasedEvent
+
+TaskGeneratedEvent --> "1" Source
+CourierReleasedEvent --> "1" Courier
+CourierReleasedEvent --> "1" Task
+
+ScheduledEvent --> EventType
+ScheduledEvent ..> SimulationEngine : выполняется движком
+
+Source ..> Task : создаёт
+
+PlacementDispatcher --> Buffer
+PlacementDispatcher --> SelectionDispatcher : уведомляет
+PlacementDispatcher --> StatisticsCollector
+PlacementDispatcher ..> Task
+
+SelectionDispatcher --> Buffer
+SelectionDispatcher --> "1..*" Courier
+SelectionDispatcher --> EventCalendar : планирует события
+SelectionDispatcher --> StatisticsCollector
+
+Buffer "1" o-- "0..*" Task : хранит
+Courier --> "0..1" Task : обрабатывает
+
+SimulationEngine --> "1..*" Source
+SimulationEngine --> "1..*" Courier
+SimulationEngine --> EventCalendar
+SimulationEngine --> PlacementDispatcher
+SimulationEngine --> SelectionDispatcher
+SimulationEngine --> StatisticsCollector
+
+EventCalendar "1" o-- "0..*" ScheduledEvent
+
+Task --> TaskStatus
+
+note right of EventCalendar
+События упорядочиваются по следующим правилам:
+1. Сначала по возрастанию времени.
+2. При одинаковом времени освобождение курьера
+   обрабатывается раньше генерации новой заявки.
+3. Если время и тип одинаковы, используется
+   порядковый номер sequenceNumber.
+
+Порядковый номер обеспечивает одинаковый
+и воспроизводимый порядок обработки событий.
+end note
+
+note bottom of Source
+ИБ — источник бесконечный (канал оформления заказа
+работает всё время моделирования).
+
+ИЗ1 — пуассоновский поток заявок: интервалы между
+поступлениями заказов от одного канала распределены
+экспоненциально с параметром meanInterval.
+end note
+
+note bottom of Buffer
+Д1ОЗ2 — постановка заявки в буфер в порядке поступления:
+новая заявка всегда встаёт в конец очереди (enqueue).
+Указателя нет. Когда заявка покидает буфер (передана
+курьеру), все заявки, стоящие за ней, сдвигаются
+на одно место к началу очереди — пропусков не остаётся.
+
+Д1ОО5 — отказ вновь пришедшей заявке: если в момент
+поступления буфер полностью заполнен, отказ получает
+именно новая, только что поступившая заявка; состояние
+буфера при этом не меняется.
+end note
+
+note bottom of SelectionDispatcher
+Д2Б5 — выбор заявки из буфера, заявки в пакете:
+пакет формируется в момент, когда освободившийся
+курьер впервые выбирает заявку. Определяется источник
+с наивысшим приоритетом среди заявок буфера — пакет
+включает все заявки буфера этого источника на момент
+формирования (activeBatchPendingCount). Пакет не
+расширяем: заявки того же источника, пришедшие позже,
+в него не входят. Пока пакет активен, свободные курьеры
+обслуживают только его заявки. Когда все заявки пакета
+обработаны (pendingCount = 0), формируется новый пакет.
+
+Д2П1 — выбор курьера по приоритету номера: поиск
+свободного курьера всегда начинается с курьера №1
+и идёт по возрастанию номера (без кольца и указателя).
+end note
+
+note bottom of Courier
+ПЗ2 — время обслуживания (доставки) распределено
+равномерно на отрезке [minServiceTime; maxServiceTime].
+end note
+
+note bottom of ScheduledEvent
+В календаре находятся только события,
+которые переводят модельное время вперёд:
+генерация заявки и освобождение курьера.
+
+Постановка в буфер, отказ, формирование и выбор
+из пакета, начало обработки выполняются сразу
+как последствия календарного события.
+end note
+
+@enduml

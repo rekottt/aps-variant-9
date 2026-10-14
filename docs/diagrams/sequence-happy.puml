@@ -1,0 +1,58 @@
+@startuml
+
+title HappyFlow — буфер свободен, курьер свободен (вариант 9)
+
+actor "Источник" as Source
+control "Диспетчер постановки" as DP
+queue "Буфер" as Buffer
+control "Диспетчер выбора" as DV
+participant "Курьер" as Courier
+participant "Сбор статистики" as Stats
+
+Source -> DP: Новая заявка (ИБ, ИЗ1 — экспоненциальный интервал)
+DP -> Buffer: Проверить заполненность буфера
+Buffer --> DP: Response: есть свободное место
+
+DP -> Buffer: Поставить заявку в конец очереди (Д1ОЗ2)
+Buffer --> DP: Response: заявка поставлена в буфер
+DP -> Stats: Зафиксировать поступление заявки
+DP -> DV: Уведомление: заявка добавлена в буфер
+
+DV -> Buffer: Есть заявки в буфере?
+Buffer --> DV: Response: есть одна заявка
+
+DV -> Courier: Найти свободного курьера\nпоиском от курьера №1 (Д2П1)
+Courier --> DV: Response: курьер №1 свободен
+
+DV -> Buffer: Определить источник с наивысшим\nприоритетом среди заявок буфера
+Buffer --> DV: Response: источник заявки
+DV -> DV: Сформировать пакет (Д2Б5):\nactiveBatchSourceId = этот источник,\nactiveBatchPendingCount = 1
+
+DV -> Buffer: Извлечь первую заявку пакета
+Buffer --> DV: Response: заявка извлечена,\nочередь пуста (Д1ОЗ2)
+
+DV -> Courier: Передать заявку на обработку
+Courier -> Courier: Начать обслуживание,\nдлительность по ПЗ2 (равномерный закон)
+DV -> Stats: Зафиксировать начало обслуживания
+DV -> DV: Запланировать событие COURIER_RELEASED
+
+note over Source, Stats
+Ожидание в буфере равно нулю:
+заявка извлекается и передаётся
+курьеру в тот же момент модельного
+времени, в который поступила.
+end note
+
+...через время обслуживания...
+
+Courier -> Courier: Завершить обслуживание заявки
+Courier -> DV: Курьер освободился (COURIER_RELEASED)
+DV -> Stats: Зафиксировать завершение заявки,\nучесть время ожидания/обслуживания/в системе
+Courier --> DV: Response: заявка COMPLETED
+
+DV -> DV: activeBatchPendingCount -= 1 (стало 0),\nпакет закрыт, activeBatchSourceId = нет
+DV -> Buffer: Есть заявки в буфере?
+Buffer --> DV: Response: буфер пуст
+DV -> Courier: Оставить курьера свободным\nв ожидании
+
+@enduml

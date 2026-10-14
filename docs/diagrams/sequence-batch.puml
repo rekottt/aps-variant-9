@@ -1,0 +1,90 @@
+@startuml
+
+title Выбор заявки из буфера, назначение и ожидание — Д2Б5 / Д2П1 (вариант 9)
+
+control "Диспетчер выбора" as DV
+queue "Буфер" as Buffer
+participant "Курьер" as Courier
+participant "Сбор статистики" as Stats
+control "Календарь событий" as Calendar
+
+note over DV, Courier
+Подпроцесс вызывается по двум триггерам:
+заявка добавлена в буфер, либо курьер освободился.
+end note
+
+DV -> Buffer: Есть заявки в буфере?
+
+alt Буфер пуст
+    Buffer --> DV: Response: буфер пуст
+    DV -> Courier: Оставить свободных курьеров в ожидании
+
+else Буфер не пуст
+
+    Buffer --> DV: Response: есть заявки
+
+    loop пока есть свободный курьер и есть заявка,\nдоступная для текущего пакета
+
+        DV -> Courier: Найти свободного курьера,\nпоиск от курьера №1 (Д2П1)
+
+        alt Свободный курьер найден
+            Courier --> DV: Response: курьер свободен (id)
+
+            alt Активный пакет не сформирован
+                DV -> Buffer: Определить источник с наивысшим\nприоритетом среди заявок буфера
+                Buffer --> DV: Response: источник X
+                DV -> DV: Сформировать пакет (Д2Б5):\nactiveBatchSourceId = X,\nactiveBatchPendingCount = число\nзаявок источника X в буфере
+                note right of DV
+                Пакет не расширяем — заявки
+                источника X, поступившие позже,
+                в него не входят
+                end note
+            else Пакет уже активен
+                note right of DV
+                Продолжаем обслуживать
+                сформированный ранее пакет
+                end note
+            end
+
+            DV -> Buffer: Есть заявка источника\nactiveBatchSourceId?
+
+            alt В буфере есть такая заявка
+                Buffer --> DV: Response: заявка извлечена,\nочередь сдвинута (Д1ОЗ2)
+                DV -> Courier: Передать заявку на обработку
+                Courier -> Courier: Начать обслуживание,\nдлительность по ПЗ2\n(равномерный закон [Tmin; Tmax])
+                DV -> Stats: Зафиксировать начало обслуживания
+                DV -> Calendar: Запланировать событие COURIER_RELEASED
+                Calendar --> DV: Response: событие добавлено
+            else Заявок текущего пакета в буфере нет
+                Buffer --> DV: Response: нет заявок источника X
+                note right of DV
+                Свободный курьер простаивает —
+                пакет ещё не обработан полностью
+                (часть его заявок в обработке),
+                брать заявки других источников нельзя
+                end note
+            end
+
+        else Свободных курьеров нет
+            Courier --> DV: Response: свободных курьеров нет
+            note over Buffer
+            Оставшиеся заявки ждут в буфере
+            end note
+        end
+
+    end
+
+end
+
+...позже, курьер завершает заявку пакета...
+
+Courier -> DV: Курьер освободился (COURIER_RELEASED)
+DV -> Stats: Зафиксировать завершение заявки
+DV -> DV: activeBatchPendingCount -= 1
+alt activeBatchPendingCount == 0
+    DV -> DV: Пакет полностью обработан,\nactiveBatchSourceId = нет
+else activeBatchPendingCount > 0
+    DV -> DV: Пакет остаётся активным
+end
+
+@enduml
